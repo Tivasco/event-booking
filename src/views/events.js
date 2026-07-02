@@ -1,4 +1,5 @@
 import { html, page, formatDate } from './html.js';
+import { MAX_SEATS_PER_BOOKING } from '../domain/bookings.js';
 
 export function eventListPage(events) {
   return page({
@@ -58,7 +59,7 @@ export function availabilitySection(event) {
   `;
 }
 
-export function eventDetailPage(event) {
+export function eventDetailPage(event, formState = {}) {
   return page({
     title: event.name,
     body: html`
@@ -66,19 +67,63 @@ export function eventDetailPage(event) {
       <h1>${event.name}</h1>
       <p class="event-meta">${formatDate(event.startsAt)} · ${event.venue} · capacity ${event.capacity}</p>
       ${availabilitySection(event)}
-      ${eventStatusNote(event)}
+      ${bookingArea(event, formState)}
     `,
   });
 }
 
-function eventStatusNote(event) {
+/**
+ * The dual-mode booking region — one fragment for both worlds. The form is a
+ * real HTML form (works with JavaScript disabled: plain POST, then a
+ * redirect); the hx-* attributes let htmx take over when present and swap
+ * this whole section in place, so a failed attempt re-renders with the
+ * honest reason and the freshly-read availability. If the last seat vanished
+ * while the visitor was typing, the re-render has no form to resubmit —
+ * the page tells the truth the moment it knows it.
+ */
+export function bookingArea(event, { error, values = {} } = {}) {
+  return html`
+    <section id="booking-area" class="card">
+      ${error && html`<p class="error" role="alert">${error}</p>`}
+      ${bookingAreaBody(event, values)}
+    </section>
+  `;
+}
+
+function bookingAreaBody(event, values) {
   if (event.started) {
-    return html`<p class="notice">This event has already started and can no longer be booked.</p>`;
+    return html`<p>Booking is closed — this event has already started.</p>`;
   }
   if (event.soldOut) {
-    return html`<p class="notice">This event is sold out. If someone cancels, seats reappear here.</p>`;
+    return html`<p>This event is sold out. If someone cancels, seats reappear here.</p>`;
   }
-  return null;
+  const maxSeats = Math.min(event.seatsRemaining, MAX_SEATS_PER_BOOKING);
+  return html`
+    <h2>Book seats</h2>
+    <form
+      action="/events/${event.id}/bookings"
+      method="post"
+      hx-post="/events/${event.id}/bookings"
+      hx-target="#booking-area"
+      hx-swap="outerHTML"
+    >
+      <label for="booking-name">Your name</label>
+      <input id="booking-name" name="name" required maxlength="200" value="${values.name ?? ''}" />
+      <label for="booking-email">Email</label>
+      <input id="booking-email" type="email" name="email" required maxlength="320" value="${values.email ?? ''}" />
+      <label for="booking-quantity">Seats</label>
+      <input
+        id="booking-quantity"
+        type="number"
+        name="quantity"
+        min="1"
+        max="${maxSeats}"
+        value="${values.quantity ?? 1}"
+        required
+      />
+      <button type="submit">Book now</button>
+    </form>
+  `;
 }
 
 function lookupSection() {

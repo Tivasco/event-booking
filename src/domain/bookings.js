@@ -4,6 +4,11 @@ import { newReference } from './reference.js';
 
 const MAX_REFERENCE_ATTEMPTS = 5;
 
+// Interface policy, not a capacity rule: it keeps one form submission from
+// draining an event. The real constraint — seats remaining — is enforced by
+// the claim statement regardless of what any caller sends.
+export const MAX_SEATS_PER_BOOKING = 10;
+
 /**
  * Capacity is enforced HERE, at the data layer, by independent mechanisms:
  *

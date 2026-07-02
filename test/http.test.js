@@ -1,6 +1,6 @@
 import { test, describe, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeTestDb, insertEvent, startApp } from './helpers.js';
+import { makeTestDb, insertEvent, startApp, postForm, readIntegrity, assertIntegrity } from './helpers.js';
 
 let db;
 let baseUrl;
@@ -91,6 +91,116 @@ describe('event detail with live availability (R2)', () => {
       assert.equal(res.status, 404, `${path} must 404`);
       assert.match(await res.text(), /does not exist/);
     }
+  });
+});
+
+const validBooking = { name: 'Ada Lovelace', email: 'ada@example.com', quantity: '1' };
+
+describe('making a booking (R3)', () => {
+  test('plain form (no JavaScript): POST → 303 → confirmation page', async () => {
+    const id = insertEvent(db, { name: 'Bookable Night', capacity: 5 });
+
+    const res = await postForm(`${baseUrl}/events/${id}/bookings`, { ...validBooking, quantity: '2' });
+    assert.equal(res.status, 303);
+    const location = res.headers.get('location');
+    assert.match(location, /^\/bookings\/[A-Z2-9]{8}$/);
+
+    const body = await (await get(location)).text();
+    assert.match(body, /Booking confirmed/);
+    assert.match(body, /Bookable Night/);
+    assert.match(body, /Ada Lovelace/);
+    assert.match(body, new RegExp(location.split('/').pop()));
+    assertIntegrity(assert, db, id);
+    assert.equal(readIntegrity(db, id).seats_booked, 2);
+  });
+
+  test('htmx form: 200 + HX-Redirect header (a real 3xx would swap a page inside the form)', async () => {
+    const id = insertEvent(db, { capacity: 5 });
+    const res = await postForm(`${baseUrl}/events/${id}/bookings`, validBooking, { htmx: true });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('hx-redirect'), /^\/bookings\/[A-Z2-9]{8}$/);
+  });
+
+  test('validation failure re-renders the form with the reason and the typed values, no JS', async () => {
+    const id = insertEvent(db, { capacity: 5 });
+    const res = await postForm(`${baseUrl}/events/${id}/bookings`, { name: '', email: 'ada@example.com', quantity: 'two' });
+    const body = await res.text();
+
+    assert.equal(res.status, 422);
+    assert.match(body, /<!doctype html>/, 'the no-JS path must get a whole page back');
+    assert.match(body, /Please tell us your name\./);
+    assert.match(body, /whole number of at least 1/);
+    assert.match(body, /value="ada@example.com"/, 'typed values must survive the failure');
+  });
+
+  test('validation failure over htmx returns just the booking-area fragment', async () => {
+    const id = insertEvent(db, { capacity: 5 });
+    const res = await postForm(
+      `${baseUrl}/events/${id}/bookings`,
+      { ...validBooking, quantity: '0' },
+      { htmx: true },
+    );
+    const body = await res.text();
+
+    assert.equal(res.status, 422);
+    assert.ok(!body.includes('<!doctype'), 'htmx gets a fragment, not a page');
+    assert.match(body, /id="booking-area"/);
+    assert.match(body, /whole number of at least 1/);
+  });
+
+  test('a greedy quantity is refused with the honest remaining count', async () => {
+    const id = insertEvent(db, { capacity: 5, booked: 3 });
+    const res = await postForm(`${baseUrl}/events/${id}/bookings`, { ...validBooking, quantity: '4' });
+    assert.equal(res.status, 409);
+    assert.match(await res.text(), /Only 2 seats are left — you asked for 4/);
+    assert.equal(readIntegrity(db, id).seats_booked, 3, 'a refused attempt must not consume seats');
+  });
+
+  test('losing the last seat gets a calm 409 and a form-less re-render', async () => {
+    const id = insertEvent(db, { capacity: 2, booked: 2 });
+    const res = await postForm(`${baseUrl}/events/${id}/bookings`, validBooking, { htmx: true });
+    const body = await res.text();
+
+    assert.equal(res.status, 409);
+    assert.match(body, /sold out — the last seat may have just been taken/);
+    assert.ok(!body.includes('<form'), 'a sold-out re-render must not offer the form again');
+  });
+
+  test('booking a started event is refused', async () => {
+    const id = insertEvent(db, { startsInDays: -1, capacity: 5 });
+    const res = await postForm(`${baseUrl}/events/${id}/bookings`, validBooking);
+    assert.equal(res.status, 409);
+    assert.match(await res.text(), /already started/);
+  });
+
+  test('booking a nonexistent event is a 404', async () => {
+    const res = await postForm(`${baseUrl}/events/999/bookings`, validBooking);
+    assert.equal(res.status, 404);
+  });
+
+  test('caps seats per booking as interface policy', async () => {
+    const id = insertEvent(db, { capacity: 50 });
+    const res = await postForm(`${baseUrl}/events/${id}/bookings`, { ...validBooking, quantity: '11' });
+    assert.equal(res.status, 422);
+    assert.match(await res.text(), /limited to 10 seats/);
+  });
+});
+
+describe('viewing a booking (R5)', () => {
+  test('the booking page is reachable by reference, any casing', async () => {
+    const id = insertEvent(db, { capacity: 5 });
+    const create = await postForm(`${baseUrl}/events/${id}/bookings`, validBooking);
+    const reference = create.headers.get('location').split('/').pop();
+
+    const res = await get(`/bookings/${reference.toLowerCase()}`);
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), new RegExp(reference));
+  });
+
+  test('an unknown reference is an honest 404', async () => {
+    const res = await get('/bookings/XXXXXXXX');
+    assert.equal(res.status, 404);
+    assert.match(await res.text(), /No booking exists/);
   });
 });
 
