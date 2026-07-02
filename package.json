@@ -1,0 +1,20 @@
+{
+  "name": "event-booking",
+  "private": true,
+  "type": "module",
+  "description": "Event booking platform — SQLite + Node + server-rendered HTML/htmx. Never sells the same seat twice.",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "seed": "node src/seed.js",
+    "test": "node --test",
+    "demo:concurrency": "node scripts/concurrency-demo.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.0",
+    "express": "^5.2.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
