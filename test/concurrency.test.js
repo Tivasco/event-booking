@@ -6,7 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { makeTestDb, insertEvent, readIntegrity } from './helpers.js';
+import { makeTestDb, insertEvent, readIntegrity, assertIntegrity, startApp, postForm } from './helpers.js';
 import { nowIso } from '../src/db.js';
 
 const run = promisify(execFile);
@@ -59,6 +59,96 @@ describe('multi-process writers (the guarantee lives in the database)', () => {
     const { seats_booked, confirmed_seats, capacity } = readIntegrity(db, eventId);
     assert.equal(seats_booked, capacity);
     assert.equal(confirmed_seats, capacity, 'booking rows must agree with the counter');
+  });
+});
+
+/**
+ * End-to-end tier: the same property through the whole shipped stack —
+ * HTTP parsing, routing, validation, rendering. What this tier alone cannot
+ * prove (that correctness doesn't hinge on Node's single thread) is exactly
+ * what the multi-process tier above exists for.
+ */
+describe('in-process HTTP race (the shipped configuration, end to end)', () => {
+  test('50 concurrent requests for the last seat: one confirmation, 49 honest refusals', async () => {
+    const eventId = insertEvent(db, { capacity: 1 });
+    const { baseUrl, close } = await startApp(db);
+    try {
+      const responses = await Promise.all(
+        Array.from({ length: 50 }, (_, i) =>
+          postForm(`${baseUrl}/events/${eventId}/bookings`, {
+            name: `Racer ${i}`,
+            email: `racer${i}@example.com`,
+            quantity: '1',
+          }),
+        ),
+      );
+
+      const winners = responses.filter((r) => r.status === 303);
+      const losers = responses.filter((r) => r.status === 409);
+      assert.equal(winners.length, 1);
+      assert.equal(losers.length, 49);
+      for (const loser of losers.slice(0, 3)) {
+        assert.match(await loser.text(), /sold out — the last seat may have just been taken/);
+      }
+
+      const { seats_booked, confirmed_seats } = readIntegrity(db, eventId);
+      assert.equal(seats_booked, 1, 'the database must agree with the HTTP responses');
+      assert.equal(confirmed_seats, 1);
+    } finally {
+      await close();
+    }
+  });
+
+  test('a mixed-quantity burst never exceeds capacity and stays reconciled', async () => {
+    const eventId = insertEvent(db, { capacity: 7 });
+    const { baseUrl, close } = await startApp(db);
+    try {
+      const responses = await Promise.all(
+        Array.from({ length: 30 }, (_, i) =>
+          postForm(`${baseUrl}/events/${eventId}/bookings`, {
+            name: `Group ${i}`,
+            email: `group${i}@example.com`,
+            quantity: String((i % 3) + 1),
+          }),
+        ),
+      );
+
+      for (const r of responses) {
+        assert.ok(r.status === 303 || r.status === 409, `unexpected status ${r.status}`);
+      }
+      const { capacity, seats_booked } = readIntegrity(db, eventId);
+      assert.ok(seats_booked <= capacity);
+      assertIntegrity(assert, db, eventId);
+    } finally {
+      await close();
+    }
+  });
+
+  test('an interleaved book/cancel storm holds the invariants after every wave', async () => {
+    const eventId = insertEvent(db, { capacity: 3 });
+    const { baseUrl, close } = await startApp(db);
+    try {
+      let previousWinners = [];
+      for (let wave = 0; wave < 5; wave += 1) {
+        const bookingAttempts = Array.from({ length: 10 }, (_, i) =>
+          postForm(`${baseUrl}/events/${eventId}/bookings`, {
+            name: `Wave ${wave} #${i}`,
+            email: `w${wave}n${i}@example.com`,
+            quantity: '1',
+          }),
+        );
+        const cancels = previousWinners.map((ref) => postForm(`${baseUrl}/bookings/${ref}/cancel`, {}));
+
+        const results = await Promise.all([...bookingAttempts, ...cancels]);
+        assertIntegrity(assert, db, eventId);
+
+        previousWinners = results
+          .filter((r) => r.url.includes('/events/') && r.status === 303)
+          .map((r) => r.headers.get('location').split('/').pop());
+      }
+    } finally {
+      await close();
+    }
   });
 });
 
