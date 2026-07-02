@@ -7,7 +7,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "seed": "node src/seed.js",
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "demo:concurrency": "node scripts/concurrency-demo.js"
   },
   "dependencies": {
