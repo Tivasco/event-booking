@@ -27,6 +27,20 @@ export function bookingPage(booking, { notice } = {}) {
         <dt>Status</dt>
         <dd>${booking.status}</dd>
       </dl>
+      ${!cancelled && cancelForm(booking)}
     `,
   });
+}
+
+// Cancelling changes whole-page state, so this stays a plain form (PRG, full
+// reload) — htmx would add a code path here without adding anything for the
+// user.
+function cancelForm(booking) {
+  return html`
+    <form action="/bookings/${booking.reference}/cancel" method="post">
+      <button type="submit" class="button-quiet">
+        Cancel booking — free ${booking.quantity === 1 ? 'the seat' : `all ${booking.quantity} seats`}
+      </button>
+    </form>
+  `;
 }

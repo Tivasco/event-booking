@@ -202,6 +202,66 @@ describe('viewing a booking (R5)', () => {
     assert.equal(res.status, 404);
     assert.match(await res.text(), /No booking exists/);
   });
+
+  test('the lookup form canonicalizes and redirects to the booking', async () => {
+    const res = await get('/bookings?reference=+ab2cd3ef+');
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/bookings/AB2CD3EF');
+
+    const empty = await get('/bookings?reference=');
+    assert.equal(empty.headers.get('location'), '/');
+  });
+});
+
+describe('cancelling a booking (R5)', () => {
+  async function bookOne(eventId, quantity = '1') {
+    const res = await postForm(`${baseUrl}/events/${eventId}/bookings`, { ...validBooking, quantity });
+    return res.headers.get('location').split('/').pop();
+  }
+
+  test('cancel returns the seats and the page says so', async () => {
+    const id = insertEvent(db, { capacity: 5 });
+    const reference = await bookOne(id, '3');
+
+    const res = await postForm(`${baseUrl}/bookings/${reference}/cancel`, {});
+    assert.equal(res.status, 303);
+
+    const body = await (await get(`/bookings/${reference}`)).text();
+    assert.match(body, /Booking cancelled/);
+    assert.match(body, /back in the\s+pool/);
+    assert.ok(!body.includes('/cancel"'), 'a cancelled booking must not offer cancelling again');
+    assert.equal(readIntegrity(db, id).seats_booked, 0);
+    assertIntegrity(assert, db, id);
+  });
+
+  test('a freed seat is immediately bookable by someone else', async () => {
+    const id = insertEvent(db, { capacity: 1 });
+    const reference = await bookOne(id);
+
+    const refused = await postForm(`${baseUrl}/events/${id}/bookings`, { ...validBooking, name: 'Grace' });
+    assert.equal(refused.status, 409);
+
+    await postForm(`${baseUrl}/bookings/${reference}/cancel`, {});
+    const won = await postForm(`${baseUrl}/events/${id}/bookings`, { ...validBooking, name: 'Grace' });
+    assert.equal(won.status, 303);
+    assertIntegrity(assert, db, id);
+  });
+
+  test('double-cancel tells the truth instead of pretending to succeed', async () => {
+    const id = insertEvent(db, { capacity: 5 });
+    const reference = await bookOne(id);
+
+    await postForm(`${baseUrl}/bookings/${reference}/cancel`, {});
+    const again = await postForm(`${baseUrl}/bookings/${reference}/cancel`, {});
+    assert.equal(again.status, 409);
+    assert.match(await again.text(), /already cancelled/);
+    assert.equal(readIntegrity(db, id).seats_booked, 0, 'seats must be returned exactly once');
+  });
+
+  test('cancelling an unknown reference is a 404', async () => {
+    const res = await postForm(`${baseUrl}/bookings/XXXXXXXX/cancel`, {});
+    assert.equal(res.status, 404);
+  });
 });
 
 describe('everything else', () => {

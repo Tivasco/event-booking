@@ -51,10 +51,33 @@ export function registerRoutes(app, db, options = {}) {
     }
   });
 
+  // The "find my booking" form on the home page — canonicalize and bounce.
+  app.get('/bookings', (req, res) => {
+    const reference = normalizeReference(String(req.query.reference ?? ''));
+    if (!reference) return res.redirect(303, '/');
+    res.redirect(303, `/bookings/${encodeURIComponent(reference)}`);
+  });
+
   app.get('/bookings/:reference', (req, res) => {
     const booking = bookings.getByReference(normalizeReference(req.params.reference));
     if (!booking) throw errors.bookingNotFound();
     res.send(String(bookingPage(booking)));
+  });
+
+  app.post('/bookings/:reference/cancel', (req, res) => {
+    const reference = normalizeReference(req.params.reference);
+    try {
+      bookings.cancel(reference);
+    } catch (err) {
+      // A stale tab double-cancelling deserves the truth, not a fake success:
+      // show the booking in its real state with the honest reason on top.
+      if (err instanceof DomainError && err.code === 'ALREADY_CANCELLED') {
+        const booking = bookings.getByReference(reference);
+        return res.status(409).send(String(bookingPage(booking, { notice: err.message })));
+      }
+      throw err;
+    }
+    res.redirect(303, `/bookings/${reference}`);
   });
 
   // Pathless catch-all: anything not routed above is honestly a 404.
