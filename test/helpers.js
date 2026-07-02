@@ -1,7 +1,9 @@
 import { mkdtempSync } from 'node:fs';
+import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { openDb, nowIso } from '../src/db.js';
+import { createApp } from '../src/app.js';
 
 /**
  * Every suite gets a real SQLite file in a temp dir — never :memory: — because
@@ -44,6 +46,29 @@ export function readIntegrity(db, eventId) {
          FROM events e WHERE e.id = ?`,
     )
     .get(eventId);
+}
+
+/** Real HTTP server on an ephemeral port — tests talk to it with fetch. */
+export async function startApp(db, options = {}) {
+  const server = createApp(db, options).listen(0);
+  await once(server, 'listening');
+  return {
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+/** Form-encoded POST, redirects left unfollowed so tests can assert on them. */
+export function postForm(url, fields, { htmx = false } = {}) {
+  return fetch(url, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      ...(htmx ? { 'HX-Request': 'true' } : {}),
+    },
+    body: new URLSearchParams(fields).toString(),
+  });
 }
 
 export function assertIntegrity(assert, db, eventId) {
