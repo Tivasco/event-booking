@@ -60,6 +60,7 @@ export function page({ title, body }) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="htmx-config" content="${HTMX_CONFIG}" />
     <title>${title} · Seatwise</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/htmx.min.js" defer></script>
   </head>
