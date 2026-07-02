@@ -13,3 +13,4 @@ data/
 # Local working material — not part of the submission
 docs/
 CLAUDE.md
+.playwright-mcp/
